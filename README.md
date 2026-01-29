@@ -133,3 +133,17 @@ The container is now running in the background. Open your web browser and naviga
 ### 4. Inspect your agents
 
 - Try inputting a sample agent URL such as `https://sample-a2a-agent-908687846511.us-central1.run.app`
+
+#### Using URL Parameters
+
+You can pre-fill the agent URL by passing it as a query parameter. This is useful when linking to the inspector from external systems or documentation:
+
+```
+http://127.0.0.1:5001/?agentUrl=https://your-agent-url.com
+```
+
+For example:
+- Local development: `http://127.0.0.1:5001/?agentUrl=http://localhost:5555`
+- Sample agent: `http://127.0.0.1:5001/?agentUrl=https://sample-a2a-agent-908687846511.us-central1.run.app`
+
+The URL will be automatically populated in the input field when the page loads. You still need to click the "Connect" button to establish the connection.
