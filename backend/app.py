@@ -394,6 +394,8 @@ async def handle_cancel_task(sid: str, json_data: dict[str, Any]) -> None:
         )
         return
 
+    task_id = task_id.strip()
+
     if sid not in clients:
         await sio.emit(
             'agent_response',

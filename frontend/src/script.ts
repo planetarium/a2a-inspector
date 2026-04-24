@@ -179,6 +179,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let contextId: string | null = null;
   let activeTaskId: string | null = null;
+  let cancelInFlight = false;
   const TERMINAL_TASK_STATES = new Set([
     'completed',
     'canceled',
@@ -908,10 +909,15 @@ document.addEventListener('DOMContentLoaded', () => {
     activeTaskId = taskId;
     if (taskId) {
       cancelBtn.classList.remove('hidden');
-      cancelBtn.disabled = false;
+      // Preserve the in-flight disabled state so a streaming update doesn't
+      // re-enable Cancel while a cancel request is already pending.
+      if (!cancelInFlight) {
+        cancelBtn.disabled = false;
+      }
     } else {
       cancelBtn.classList.add('hidden');
       cancelBtn.disabled = false;
+      cancelInFlight = false;
     }
   };
 
@@ -988,6 +994,7 @@ document.addEventListener('DOMContentLoaded', () => {
   cancelBtn.addEventListener('click', () => {
     if (!activeTaskId || cancelBtn.disabled) return;
     const requestId = `cancel-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+    cancelInFlight = true;
     cancelBtn.disabled = true;
     socket.emit('cancel_task', {
       taskId: activeTaskId,
@@ -1061,6 +1068,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Keep activeTaskId so the user can retry cancel; a subsequent
       // terminal status/task event will clear it when the task is actually done.
       if (activeTaskId) {
+        cancelInFlight = false;
         cancelBtn.disabled = false;
       }
       return;
