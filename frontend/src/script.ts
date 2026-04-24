@@ -180,6 +180,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let contextId: string | null = null;
   let activeTaskId: string | null = null;
   let cancelInFlight = false;
+  let pendingCancelRequestId: string | null = null;
   const TERMINAL_TASK_STATES = new Set([
     'completed',
     'canceled',
@@ -918,6 +919,7 @@ document.addEventListener('DOMContentLoaded', () => {
       cancelBtn.classList.add('hidden');
       cancelBtn.disabled = false;
       cancelInFlight = false;
+      pendingCancelRequestId = null;
     }
   };
 
@@ -995,6 +997,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!activeTaskId || cancelBtn.disabled) return;
     const requestId = `cancel-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     cancelInFlight = true;
+    pendingCancelRequestId = requestId;
     cancelBtn.disabled = true;
     socket.emit('cancel_task', {
       taskId: activeTaskId,
@@ -1065,10 +1068,16 @@ document.addEventListener('DOMContentLoaded', () => {
         true,
         validationErrors,
       );
-      // Keep activeTaskId so the user can retry cancel; a subsequent
-      // terminal status/task event will clear it when the task is actually done.
-      if (activeTaskId) {
+      // Only re-enable Cancel if this error is the response to our pending
+      // cancel request — unrelated failures (e.g., a send_message error)
+      // shouldn't disturb the in-flight cancel state.
+      if (
+        activeTaskId &&
+        pendingCancelRequestId &&
+        event.id === pendingCancelRequestId
+      ) {
         cancelInFlight = false;
+        pendingCancelRequestId = null;
         cancelBtn.disabled = false;
       }
       return;
@@ -1081,12 +1090,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const eventTaskId = event.taskId || (event.kind === 'task' ? event.id : null);
     const eventState = event.status?.state;
+    const isTerminalTaskEvent =
+      (!!eventState && TERMINAL_TASK_STATES.has(eventState)) ||
+      (event.kind === 'status-update' && event.final === true);
     if (eventTaskId) {
-      if (eventState && TERMINAL_TASK_STATES.has(eventState)) {
-        setActiveTask(null);
-      } else if (event.kind === 'status-update' && event.final) {
-        setActiveTask(null);
-      } else {
+      if (isTerminalTaskEvent) {
+        // Only clear if the terminal event belongs to the currently tracked
+        // task; late terminals for older tasks shouldn't hide Cancel.
+        if (eventTaskId === activeTaskId) {
+          setActiveTask(null);
+        }
+      } else if (
+        !activeTaskId ||
+        eventTaskId === activeTaskId ||
+        event.kind === 'task'
+      ) {
+        // Adopt a new active task from a fresh `task` event, or keep tracking
+        // the same task on further updates; ignore non-terminal updates for
+        // unrelated tasks while one is already active.
         setActiveTask(eventTaskId);
       }
     }

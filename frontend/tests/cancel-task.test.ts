@@ -33,6 +33,8 @@ function setupCancelHarness() {
   const cancelBtn = document.getElementById('cancel-btn') as HTMLButtonElement;
   let activeTaskId: string | null = null;
   let cancelInFlight = false;
+  let pendingCancelRequestId: string | null = null;
+  let nextCancelRequestId = 1;
   const emitted: Array<{event: string; payload: unknown}> = [];
 
   const socket = {
@@ -52,20 +54,28 @@ function setupCancelHarness() {
       cancelBtn.classList.add('hidden');
       cancelBtn.disabled = false;
       cancelInFlight = false;
+      pendingCancelRequestId = null;
     }
   };
 
   cancelBtn.addEventListener('click', () => {
     if (!activeTaskId || cancelBtn.disabled) return;
+    const requestId = `cancel-req-${nextCancelRequestId++}`;
     cancelInFlight = true;
+    pendingCancelRequestId = requestId;
     cancelBtn.disabled = true;
-    socket.emit('cancel_task', {taskId: activeTaskId, id: 'cancel-req-1'});
+    socket.emit('cancel_task', {taskId: activeTaskId, id: requestId});
   });
 
   const handleAgentResponse = (event: AgentResponseEvent) => {
     if (event.error) {
-      if (activeTaskId) {
+      if (
+        activeTaskId &&
+        pendingCancelRequestId &&
+        event.id === pendingCancelRequestId
+      ) {
         cancelInFlight = false;
+        pendingCancelRequestId = null;
         cancelBtn.disabled = false;
       }
       return;
@@ -74,12 +84,19 @@ function setupCancelHarness() {
     const eventTaskId =
       event.taskId || (event.kind === 'task' ? event.id : null);
     const eventState = event.status?.state;
+    const isTerminalTaskEvent =
+      (!!eventState && TERMINAL_TASK_STATES.has(eventState)) ||
+      (event.kind === 'status-update' && event.final === true);
     if (eventTaskId) {
-      if (eventState && TERMINAL_TASK_STATES.has(eventState)) {
-        setActiveTask(null);
-      } else if (event.kind === 'status-update' && event.final) {
-        setActiveTask(null);
-      } else {
+      if (isTerminalTaskEvent) {
+        if (eventTaskId === activeTaskId) {
+          setActiveTask(null);
+        }
+      } else if (
+        !activeTaskId ||
+        eventTaskId === activeTaskId ||
+        event.kind === 'task'
+      ) {
         setActiveTask(eventTaskId);
       }
     }
@@ -90,6 +107,7 @@ function setupCancelHarness() {
     emitted,
     handleAgentResponse,
     getActiveTaskId: () => activeTaskId,
+    getPendingCancelRequestId: () => pendingCancelRequestId,
     resetSession: () => setActiveTask(null),
   };
 }
@@ -182,23 +200,25 @@ describe('Cancel Task Button', () => {
     expect(harness.cancelBtn.disabled).toBe(true);
   });
 
-  it('keeps activeTaskId and re-enables the button on error', () => {
+  it('keeps activeTaskId and re-enables the button on a matching cancel error', () => {
     harness.handleAgentResponse({
       kind: 'task',
       id: 'task-abc',
       status: {state: 'working'},
     });
     fireEvent.click(harness.cancelBtn);
+    const cancelReqId = harness.getPendingCancelRequestId();
 
     harness.handleAgentResponse({
       kind: 'message',
-      id: 'err-1',
+      id: cancelReqId!,
       error: 'Agent does not support cancel',
     });
 
     expect(harness.getActiveTaskId()).toBe('task-abc');
     expect(harness.cancelBtn.disabled).toBe(false);
     expect(harness.cancelBtn.classList.contains('hidden')).toBe(false);
+    expect(harness.getPendingCancelRequestId()).toBe(null);
   });
 
   it('allows retry after a failed cancel', () => {
@@ -208,9 +228,10 @@ describe('Cancel Task Button', () => {
       status: {state: 'working'},
     });
     fireEvent.click(harness.cancelBtn);
+    const cancelReqId = harness.getPendingCancelRequestId();
     harness.handleAgentResponse({
       kind: 'message',
-      id: 'err-1',
+      id: cancelReqId!,
       error: 'Transient failure',
     });
 
@@ -218,6 +239,27 @@ describe('Cancel Task Button', () => {
 
     expect(harness.emitted).toHaveLength(2);
     expect(harness.emitted[1].event).toBe('cancel_task');
+  });
+
+  it('ignores unrelated error responses while cancel is pending', () => {
+    harness.handleAgentResponse({
+      kind: 'task',
+      id: 'task-abc',
+      status: {state: 'working'},
+    });
+    fireEvent.click(harness.cancelBtn);
+
+    harness.handleAgentResponse({
+      kind: 'message',
+      id: 'some-other-send-message-id',
+      error: 'send_message failed for a different request',
+    });
+
+    // cancel state stays in-flight — button remains disabled, no retry allowed
+    expect(harness.cancelBtn.disabled).toBe(true);
+    expect(harness.getPendingCancelRequestId()).not.toBe(null);
+    fireEvent.click(harness.cancelBtn);
+    expect(harness.emitted).toHaveLength(1);
   });
 
   it('hides Cancel when the task reaches a terminal state', () => {
@@ -284,5 +326,58 @@ describe('Cancel Task Button', () => {
 
     expect(harness.cancelBtn.classList.contains('hidden')).toBe(true);
     expect(harness.getActiveTaskId()).toBe(null);
+  });
+
+  it('ignores a late terminal update for an older task', () => {
+    harness.handleAgentResponse({
+      kind: 'task',
+      id: 'task-current',
+      status: {state: 'working'},
+    });
+
+    // A delayed terminal event arrives for a different, previous task.
+    harness.handleAgentResponse({
+      kind: 'status-update',
+      id: 'evt-late',
+      taskId: 'task-old',
+      final: true,
+      status: {state: 'completed'},
+    });
+
+    expect(harness.getActiveTaskId()).toBe('task-current');
+    expect(harness.cancelBtn.classList.contains('hidden')).toBe(false);
+  });
+
+  it('ignores a non-terminal status-update for an unrelated task while one is active', () => {
+    harness.handleAgentResponse({
+      kind: 'task',
+      id: 'task-current',
+      status: {state: 'working'},
+    });
+
+    harness.handleAgentResponse({
+      kind: 'status-update',
+      id: 'evt-other',
+      taskId: 'task-other',
+      status: {state: 'working'},
+    });
+
+    expect(harness.getActiveTaskId()).toBe('task-current');
+  });
+
+  it('switches to a new active task when a fresh `task` event arrives', () => {
+    harness.handleAgentResponse({
+      kind: 'task',
+      id: 'task-first',
+      status: {state: 'working'},
+    });
+
+    harness.handleAgentResponse({
+      kind: 'task',
+      id: 'task-second',
+      status: {state: 'working'},
+    });
+
+    expect(harness.getActiveTaskId()).toBe('task-second');
   });
 });
