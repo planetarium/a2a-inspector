@@ -20,12 +20,11 @@ interface FileWithUri extends FileBase {
 
 type FileContent = FileWithBytes | FileWithUri;
 
-interface AgentResponseEvent {
+interface SuccessfulAgentResponseEvent {
   kind: 'task' | 'status-update' | 'artifact-update' | 'message';
   id: string;
   taskId?: string;
   contextId?: string;
-  error?: string;
   final?: boolean;
   status?: {
     state: string;
@@ -48,6 +47,16 @@ interface AgentResponseEvent {
   parts?: { text?: string }[];
   validation_errors: string[];
 }
+
+interface ErrorAgentResponseEvent {
+  id: string;
+  error: string;
+  validation_errors?: string[];
+}
+
+type AgentResponseEvent =
+  | SuccessfulAgentResponseEvent
+  | ErrorAgentResponseEvent;
 
 interface DebugLog {
   type: 'request' | 'response' | 'error' | 'validation_error';
@@ -1059,7 +1068,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const validationErrors = event.validation_errors || [];
 
-    if (event.error) {
+    if ('error' in event) {
       const messageHtml = `<span class="kind-chip kind-chip-error">error</span> Error: ${DOMPurify.sanitize(event.error)}`;
       appendMessage(
         'agent error',

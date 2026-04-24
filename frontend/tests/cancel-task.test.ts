@@ -13,14 +13,22 @@ const TERMINAL_TASK_STATES = new Set([
   'rejected',
 ]);
 
-interface AgentResponseEvent {
+interface SuccessfulAgentResponseEvent {
   kind: 'task' | 'status-update' | 'artifact-update' | 'message';
   id: string;
   taskId?: string;
-  error?: string;
   final?: boolean;
   status?: {state: string};
 }
+
+interface ErrorAgentResponseEvent {
+  id: string;
+  error: string;
+}
+
+type AgentResponseEvent =
+  | SuccessfulAgentResponseEvent
+  | ErrorAgentResponseEvent;
 
 // Minimal harness that mirrors the cancel-related logic in script.ts so the
 // behavior can be exercised without the full DOMContentLoaded initialization.
@@ -68,7 +76,7 @@ function setupCancelHarness() {
   });
 
   const handleAgentResponse = (event: AgentResponseEvent) => {
-    if (event.error) {
+    if ('error' in event) {
       if (
         activeTaskId &&
         pendingCancelRequestId &&
@@ -210,7 +218,6 @@ describe('Cancel Task Button', () => {
     const cancelReqId = harness.getPendingCancelRequestId();
 
     harness.handleAgentResponse({
-      kind: 'message',
       id: cancelReqId!,
       error: 'Agent does not support cancel',
     });
@@ -230,7 +237,6 @@ describe('Cancel Task Button', () => {
     fireEvent.click(harness.cancelBtn);
     const cancelReqId = harness.getPendingCancelRequestId();
     harness.handleAgentResponse({
-      kind: 'message',
       id: cancelReqId!,
       error: 'Transient failure',
     });
@@ -250,7 +256,6 @@ describe('Cancel Task Button', () => {
     fireEvent.click(harness.cancelBtn);
 
     harness.handleAgentResponse({
-      kind: 'message',
       id: 'some-other-send-message-id',
       error: 'send_message failed for a different request',
     });

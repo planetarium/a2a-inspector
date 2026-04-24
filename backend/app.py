@@ -416,13 +416,13 @@ async def handle_cancel_task(sid: str, json_data: dict[str, Any]) -> None:
     try:
         cancelled_task = await a2a_client.cancel_task(TaskIdParams(id=task_id))
         await _process_a2a_response((cancelled_task, None), sid, request_id)
-    except Exception as e:
+    except Exception:
         logger.error(
             f'Failed to cancel task {task_id} for sid {sid}', exc_info=True
         )
         await sio.emit(
             'agent_response',
-            {'error': f'Failed to cancel task: {e}', 'id': request_id},
+            {'error': 'Failed to cancel task.', 'id': request_id},
             to=sid,
         )
 
