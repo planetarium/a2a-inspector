@@ -42,6 +42,7 @@ function setupCancelHarness() {
   let activeTaskId: string | null = null;
   let cancelInFlight = false;
   let pendingCancelRequestId: string | null = null;
+  let pendingCancelTaskId: string | null = null;
   let nextCancelRequestId = 1;
   const emitted: Array<{event: string; payload: unknown}> = [];
 
@@ -52,6 +53,11 @@ function setupCancelHarness() {
   };
 
   const setActiveTask = (taskId: string | null) => {
+    if (taskId !== activeTaskId) {
+      cancelInFlight = false;
+      pendingCancelRequestId = null;
+      pendingCancelTaskId = null;
+    }
     activeTaskId = taskId;
     if (taskId) {
       cancelBtn.classList.remove('hidden');
@@ -61,8 +67,6 @@ function setupCancelHarness() {
     } else {
       cancelBtn.classList.add('hidden');
       cancelBtn.disabled = false;
-      cancelInFlight = false;
-      pendingCancelRequestId = null;
     }
   };
 
@@ -71,6 +75,7 @@ function setupCancelHarness() {
     const requestId = `cancel-req-${nextCancelRequestId++}`;
     cancelInFlight = true;
     pendingCancelRequestId = requestId;
+    pendingCancelTaskId = activeTaskId;
     cancelBtn.disabled = true;
     socket.emit('cancel_task', {taskId: activeTaskId, id: requestId});
   });
@@ -80,10 +85,12 @@ function setupCancelHarness() {
       if (
         activeTaskId &&
         pendingCancelRequestId &&
-        event.id === pendingCancelRequestId
+        event.id === pendingCancelRequestId &&
+        pendingCancelTaskId === activeTaskId
       ) {
         cancelInFlight = false;
         pendingCancelRequestId = null;
+        pendingCancelTaskId = null;
         cancelBtn.disabled = false;
       }
       return;
@@ -384,5 +391,55 @@ describe('Cancel Task Button', () => {
     });
 
     expect(harness.getActiveTaskId()).toBe('task-second');
+  });
+
+  it('re-enables Cancel for a new task even if a prior cancel is still pending', () => {
+    harness.handleAgentResponse({
+      kind: 'task',
+      id: 'task-old',
+      status: {state: 'working'},
+    });
+    fireEvent.click(harness.cancelBtn);
+    expect(harness.cancelBtn.disabled).toBe(true);
+
+    // A new task supersedes the old one before the prior cancel resolves.
+    harness.handleAgentResponse({
+      kind: 'task',
+      id: 'task-new',
+      status: {state: 'working'},
+    });
+
+    expect(harness.getActiveTaskId()).toBe('task-new');
+    expect(harness.cancelBtn.disabled).toBe(false);
+    expect(harness.getPendingCancelRequestId()).toBe(null);
+  });
+
+  it('ignores a late cancel error belonging to a superseded task', () => {
+    harness.handleAgentResponse({
+      kind: 'task',
+      id: 'task-old',
+      status: {state: 'working'},
+    });
+    fireEvent.click(harness.cancelBtn);
+    const staleCancelId = harness.getPendingCancelRequestId();
+
+    // New task starts; active switches and cancel state resets.
+    harness.handleAgentResponse({
+      kind: 'task',
+      id: 'task-new',
+      status: {state: 'working'},
+    });
+    // User clicks cancel for the new task — must be allowed.
+    fireEvent.click(harness.cancelBtn);
+    expect(harness.cancelBtn.disabled).toBe(true);
+
+    // Late error arrives for the old cancel — must NOT re-enable the new
+    // pending cancel.
+    harness.handleAgentResponse({
+      id: staleCancelId!,
+      error: 'Old cancel failed',
+    });
+
+    expect(harness.cancelBtn.disabled).toBe(true);
   });
 });

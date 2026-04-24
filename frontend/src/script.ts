@@ -190,6 +190,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let activeTaskId: string | null = null;
   let cancelInFlight = false;
   let pendingCancelRequestId: string | null = null;
+  let pendingCancelTaskId: string | null = null;
   const TERMINAL_TASK_STATES = new Set([
     'completed',
     'canceled',
@@ -916,19 +917,23 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   const setActiveTask = (taskId: string | null) => {
+    // When adopting a different task, any still-pending cancel belonged to
+    // the prior task — drop it so the new task isn't locked out of cancel
+    // and so a late error for the old cancel can't re-enable this button.
+    if (taskId !== activeTaskId) {
+      cancelInFlight = false;
+      pendingCancelRequestId = null;
+      pendingCancelTaskId = null;
+    }
     activeTaskId = taskId;
     if (taskId) {
       cancelBtn.classList.remove('hidden');
-      // Preserve the in-flight disabled state so a streaming update doesn't
-      // re-enable Cancel while a cancel request is already pending.
       if (!cancelInFlight) {
         cancelBtn.disabled = false;
       }
     } else {
       cancelBtn.classList.add('hidden');
       cancelBtn.disabled = false;
-      cancelInFlight = false;
-      pendingCancelRequestId = null;
     }
   };
 
@@ -1007,6 +1012,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const requestId = `cancel-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     cancelInFlight = true;
     pendingCancelRequestId = requestId;
+    pendingCancelTaskId = activeTaskId;
     cancelBtn.disabled = true;
     socket.emit('cancel_task', {
       taskId: activeTaskId,
@@ -1078,15 +1084,18 @@ document.addEventListener('DOMContentLoaded', () => {
         validationErrors,
       );
       // Only re-enable Cancel if this error is the response to our pending
-      // cancel request — unrelated failures (e.g., a send_message error)
-      // shouldn't disturb the in-flight cancel state.
+      // cancel request for the task that is still the active one — unrelated
+      // failures and late errors from an older task shouldn't disturb the
+      // cancel state of a fresh task.
       if (
         activeTaskId &&
         pendingCancelRequestId &&
-        event.id === pendingCancelRequestId
+        event.id === pendingCancelRequestId &&
+        pendingCancelTaskId === activeTaskId
       ) {
         cancelInFlight = false;
         pendingCancelRequestId = null;
+        pendingCancelTaskId = null;
         cancelBtn.disabled = false;
       }
       return;

@@ -381,7 +381,10 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
 async def handle_cancel_task(sid: str, json_data: dict[str, Any]) -> None:
     """Handle the 'cancel_task' socket.io event."""
     task_id = json_data.get('taskId')
-    request_id = json_data.get('id', str(uuid4()))
+    raw_request_id = json_data.get('id')
+    request_id = (
+        str(raw_request_id).strip() if raw_request_id is not None else ''
+    ) or str(uuid4())
 
     if not isinstance(task_id, str) or not task_id.strip():
         await sio.emit(
