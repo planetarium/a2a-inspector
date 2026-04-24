@@ -1058,7 +1058,11 @@ document.addEventListener('DOMContentLoaded', () => {
         true,
         validationErrors,
       );
-      setActiveTask(null);
+      // Keep activeTaskId so the user can retry cancel; a subsequent
+      // terminal status/task event will clear it when the task is actually done.
+      if (activeTaskId) {
+        cancelBtn.disabled = false;
+      }
       return;
     }
 

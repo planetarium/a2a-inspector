@@ -383,10 +383,13 @@ async def handle_cancel_task(sid: str, json_data: dict[str, Any]) -> None:
     task_id = json_data.get('taskId')
     request_id = json_data.get('id', str(uuid4()))
 
-    if not task_id:
+    if not isinstance(task_id, str) or not task_id.strip():
         await sio.emit(
             'agent_response',
-            {'error': 'taskId is required to cancel a task.', 'id': request_id},
+            {
+                'error': 'taskId must be a non-empty string to cancel a task.',
+                'id': request_id,
+            },
             to=sid,
         )
         return
