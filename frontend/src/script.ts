@@ -20,11 +20,12 @@ interface FileWithUri extends FileBase {
 
 type FileContent = FileWithBytes | FileWithUri;
 
-interface AgentResponseEvent {
+interface SuccessfulAgentResponseEvent {
   kind: 'task' | 'status-update' | 'artifact-update' | 'message';
   id: string;
+  taskId?: string;
   contextId?: string;
-  error?: string;
+  final?: boolean;
   status?: {
     state: string;
     message?: { parts?: { text?: string }[] };
@@ -46,6 +47,16 @@ interface AgentResponseEvent {
   parts?: { text?: string }[];
   validation_errors: string[];
 }
+
+interface ErrorAgentResponseEvent {
+  id: string;
+  error: string;
+  validation_errors?: string[];
+}
+
+type AgentResponseEvent =
+  | SuccessfulAgentResponseEvent
+  | ErrorAgentResponseEvent;
 
 interface DebugLog {
   type: 'request' | 'response' | 'error' | 'validation_error';
@@ -141,6 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
   ) as HTMLElement;
   const chatInput = document.getElementById('chat-input') as HTMLInputElement;
   const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
+  const cancelBtn = document.getElementById('cancel-btn') as HTMLButtonElement;
   const chatMessages = document.getElementById('chat-messages') as HTMLElement;
   const debugConsole = document.getElementById('debug-console') as HTMLElement;
   const debugHandle = document.getElementById('debug-handle') as HTMLElement;
@@ -175,6 +187,17 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   let contextId: string | null = null;
+  let activeTaskId: string | null = null;
+  let cancelInFlight = false;
+  let pendingCancelRequestId: string | null = null;
+  let pendingCancelTaskId: string | null = null;
+  const TERMINAL_TASK_STATES = new Set([
+    'completed',
+    'canceled',
+    'cancelled',
+    'failed',
+    'rejected',
+  ]);
   let isConnected = false;
   let supportedInputModes: string[] = ['text/plain'];
   let supportedOutputModes: string[] = ['text/plain'];
@@ -893,8 +916,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  const setActiveTask = (taskId: string | null) => {
+    // When adopting a different task, any still-pending cancel belonged to
+    // the prior task — drop it so the new task isn't locked out of cancel
+    // and so a late error for the old cancel can't re-enable this button.
+    if (taskId !== activeTaskId) {
+      cancelInFlight = false;
+      pendingCancelRequestId = null;
+      pendingCancelTaskId = null;
+    }
+    activeTaskId = taskId;
+    if (taskId) {
+      cancelBtn.classList.remove('hidden');
+      if (!cancelInFlight) {
+        cancelBtn.disabled = false;
+      }
+    } else {
+      cancelBtn.classList.add('hidden');
+      cancelBtn.disabled = false;
+    }
+  };
+
   const resetSession = () => {
     contextId = null;
+    setActiveTask(null);
     chatMessages.innerHTML =
       '<p class="placeholder-text">Send a message to start a new session.</p>';
     updateSessionUI();
@@ -962,6 +1007,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') sendMessage();
   });
 
+  cancelBtn.addEventListener('click', () => {
+    if (!activeTaskId || cancelBtn.disabled) return;
+    const requestId = `cancel-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+    cancelInFlight = true;
+    pendingCancelRequestId = requestId;
+    pendingCancelTaskId = activeTaskId;
+    cancelBtn.disabled = true;
+    socket.emit('cancel_task', {
+      taskId: activeTaskId,
+      id: requestId,
+    });
+  });
+
   const renderMultimediaContent = (uri: string, mimeType: string): string => {
     const sanitizedUri = DOMPurify.sanitize(uri);
     const sanitizedMimeType = DOMPurify.sanitize(mimeType);
@@ -1016,7 +1074,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const validationErrors = event.validation_errors || [];
 
-    if (event.error) {
+    if ('error' in event) {
       const messageHtml = `<span class="kind-chip kind-chip-error">error</span> Error: ${DOMPurify.sanitize(event.error)}`;
       appendMessage(
         'agent error',
@@ -1025,12 +1083,51 @@ document.addEventListener('DOMContentLoaded', () => {
         true,
         validationErrors,
       );
+      // Only re-enable Cancel if this error is the response to our pending
+      // cancel request for the task that is still the active one — unrelated
+      // failures and late errors from an older task shouldn't disturb the
+      // cancel state of a fresh task.
+      if (
+        activeTaskId &&
+        pendingCancelRequestId &&
+        event.id === pendingCancelRequestId &&
+        pendingCancelTaskId === activeTaskId
+      ) {
+        cancelInFlight = false;
+        pendingCancelRequestId = null;
+        pendingCancelTaskId = null;
+        cancelBtn.disabled = false;
+      }
       return;
     }
 
     if (event.contextId) {
       contextId = event.contextId;
       updateSessionUI();
+    }
+
+    const eventTaskId = event.taskId || (event.kind === 'task' ? event.id : null);
+    const eventState = event.status?.state;
+    const isTerminalTaskEvent =
+      (!!eventState && TERMINAL_TASK_STATES.has(eventState)) ||
+      (event.kind === 'status-update' && event.final === true);
+    if (eventTaskId) {
+      if (isTerminalTaskEvent) {
+        // Only clear if the terminal event belongs to the currently tracked
+        // task; late terminals for older tasks shouldn't hide Cancel.
+        if (eventTaskId === activeTaskId) {
+          setActiveTask(null);
+        }
+      } else if (
+        !activeTaskId ||
+        eventTaskId === activeTaskId ||
+        event.kind === 'task'
+      ) {
+        // Adopt a new active task from a fresh `task` event, or keep tracking
+        // the same task on further updates; ignore non-terminal updates for
+        // unrelated tasks while one is already active.
+        setActiveTask(eventTaskId);
+      }
     }
 
     switch (event.kind) {

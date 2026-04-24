@@ -516,6 +516,30 @@ body.dark-mode .auth-type-select:hover {
     cursor: not-allowed;
 }
 
+#cancel-btn {
+    padding: 10px 15px;
+    border: none;
+    background-color: #e4434e;
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-left: 8px;
+}
+
+#cancel-btn:hover:not(:disabled) {
+    background-color: #c7313b;
+}
+
+#cancel-btn:disabled {
+    background-color: #e4e6eb;
+    color: #9aa0a6;
+    cursor: not-allowed;
+}
+
+#cancel-btn.hidden {
+    display: none;
+}
+
 /* Multimodal UI Support */
 .chat-input-wrapper {
     margin-top: 10px;
