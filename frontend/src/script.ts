@@ -23,8 +23,10 @@ type FileContent = FileWithBytes | FileWithUri;
 interface AgentResponseEvent {
   kind: 'task' | 'status-update' | 'artifact-update' | 'message';
   id: string;
+  taskId?: string;
   contextId?: string;
   error?: string;
+  final?: boolean;
   status?: {
     state: string;
     message?: { parts?: { text?: string }[] };
@@ -141,6 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
   ) as HTMLElement;
   const chatInput = document.getElementById('chat-input') as HTMLInputElement;
   const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
+  const cancelBtn = document.getElementById('cancel-btn') as HTMLButtonElement;
   const chatMessages = document.getElementById('chat-messages') as HTMLElement;
   const debugConsole = document.getElementById('debug-console') as HTMLElement;
   const debugHandle = document.getElementById('debug-handle') as HTMLElement;
@@ -175,6 +178,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   let contextId: string | null = null;
+  let activeTaskId: string | null = null;
+  const TERMINAL_TASK_STATES = new Set([
+    'completed',
+    'canceled',
+    'cancelled',
+    'failed',
+    'rejected',
+  ]);
   let isConnected = false;
   let supportedInputModes: string[] = ['text/plain'];
   let supportedOutputModes: string[] = ['text/plain'];
@@ -893,8 +904,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  const setActiveTask = (taskId: string | null) => {
+    activeTaskId = taskId;
+    if (taskId) {
+      cancelBtn.classList.remove('hidden');
+      cancelBtn.disabled = false;
+    } else {
+      cancelBtn.classList.add('hidden');
+      cancelBtn.disabled = false;
+    }
+  };
+
   const resetSession = () => {
     contextId = null;
+    setActiveTask(null);
     chatMessages.innerHTML =
       '<p class="placeholder-text">Send a message to start a new session.</p>';
     updateSessionUI();
@@ -962,6 +985,16 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') sendMessage();
   });
 
+  cancelBtn.addEventListener('click', () => {
+    if (!activeTaskId || cancelBtn.disabled) return;
+    const requestId = `cancel-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+    cancelBtn.disabled = true;
+    socket.emit('cancel_task', {
+      taskId: activeTaskId,
+      id: requestId,
+    });
+  });
+
   const renderMultimediaContent = (uri: string, mimeType: string): string => {
     const sanitizedUri = DOMPurify.sanitize(uri);
     const sanitizedMimeType = DOMPurify.sanitize(mimeType);
@@ -1025,12 +1058,25 @@ document.addEventListener('DOMContentLoaded', () => {
         true,
         validationErrors,
       );
+      setActiveTask(null);
       return;
     }
 
     if (event.contextId) {
       contextId = event.contextId;
       updateSessionUI();
+    }
+
+    const eventTaskId = event.taskId || (event.kind === 'task' ? event.id : null);
+    const eventState = event.status?.state;
+    if (eventTaskId) {
+      if (eventState && TERMINAL_TASK_STATES.has(eventState)) {
+        setActiveTask(null);
+      } else if (event.kind === 'status-update' && event.final) {
+        setActiveTask(null);
+      } else {
+        setActiveTask(eventTaskId);
+      }
     }
 
     switch (event.kind) {

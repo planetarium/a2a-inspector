@@ -20,6 +20,7 @@ from a2a.types import (
     Role,
     Task,
     TaskArtifactUpdateEvent,
+    TaskIdParams,
     TaskStatusUpdateEvent,
     TextPart,
     TransportProtocol,
@@ -372,6 +373,51 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         await sio.emit(
             'agent_response',
             {'error': f'Failed to send message: {e}', 'id': message_id},
+            to=sid,
+        )
+
+
+@sio.on('cancel_task')
+async def handle_cancel_task(sid: str, json_data: dict[str, Any]) -> None:
+    """Handle the 'cancel_task' socket.io event."""
+    task_id = json_data.get('taskId')
+    request_id = json_data.get('id', str(uuid4()))
+
+    if not task_id:
+        await sio.emit(
+            'agent_response',
+            {'error': 'taskId is required to cancel a task.', 'id': request_id},
+            to=sid,
+        )
+        return
+
+    if sid not in clients:
+        await sio.emit(
+            'agent_response',
+            {'error': 'Client not initialized.', 'id': request_id},
+            to=sid,
+        )
+        return
+
+    _, a2a_client, _, transport = clients[sid]
+
+    debug_request = {
+        'transport': transport,
+        'method': 'tasks/cancel',
+        'params': {'id': task_id},
+    }
+    await _emit_debug_log(sid, request_id, 'request', debug_request)
+
+    try:
+        cancelled_task = await a2a_client.cancel_task(TaskIdParams(id=task_id))
+        await _process_a2a_response((cancelled_task, None), sid, request_id)
+    except Exception as e:
+        logger.error(
+            f'Failed to cancel task {task_id} for sid {sid}', exc_info=True
+        )
+        await sio.emit(
+            'agent_response',
+            {'error': f'Failed to cancel task: {e}', 'id': request_id},
             to=sid,
         )
 
