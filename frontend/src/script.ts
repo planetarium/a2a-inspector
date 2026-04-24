@@ -969,6 +969,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if ((messageText.trim() || attachments.length > 0) && !chatInput.disabled) {
       const sanitizedMessage = DOMPurify.sanitize(messageText);
 
+      // A new user turn supersedes any prior task state. Agents that never
+      // signal final/terminal (common in one-shot chat flows) would otherwise
+      // leave Cancel stuck visible for the previous turn.
+      setActiveTask(null);
+
       const messageId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
       const metadata = getMessageMetadata();
       const attachmentsForDisplay = [...attachments];
