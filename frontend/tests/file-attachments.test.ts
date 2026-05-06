@@ -269,6 +269,12 @@ describe('handleFileSelection — input mode override', () => {
     expect(message).toContain('"unknown"');
   });
 
+  it('attaches with application/octet-stream fallback when file type is empty', () => {
+    confirmSpy.mockReturnValue(true);
+    const attached = selectFiles([{type: ''}], ['text/plain']);
+    expect(attached).toEqual(['application/octet-stream']);
+  });
+
   it('prompts per file in a multi-file selection', () => {
     confirmSpy.mockReturnValueOnce(true).mockReturnValueOnce(false);
     const attached = selectFiles(
@@ -363,7 +369,7 @@ function selectFiles(
       if (!proceed) continue;
     }
 
-    attached.push(file.type);
+    attached.push(file.type || 'application/octet-stream');
   }
   return attached;
 }
