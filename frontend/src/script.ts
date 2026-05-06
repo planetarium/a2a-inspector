@@ -485,7 +485,6 @@ document.addEventListener('DOMContentLoaded', () => {
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
 
-      // Check if file type is supported
       const isSupported = supportedInputModes.some(mode => {
         if (mode === '*/*') return true;
         if (mode.endsWith('/*')) {
@@ -496,10 +495,14 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       if (!isSupported) {
-        alert(
-          `File type ${file.type} is not supported by this agent. Supported types: ${supportedInputModes.join(', ')}`,
+        const advertised =
+          supportedInputModes.length > 0
+            ? supportedInputModes.join(', ')
+            : 'none specified';
+        const proceed = confirm(
+          `File type "${file.type || 'unknown'}" is not in the agent's advertised input modes (${advertised}).\n\nAttach anyway? The agent may reject it.`,
         );
-        continue;
+        if (!proceed) continue;
       }
 
       const base64Data = await fileToBase64(file);

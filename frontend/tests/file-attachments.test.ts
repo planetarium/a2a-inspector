@@ -2,7 +2,7 @@
  * Tests for file attachment UI
  */
 
-import {describe, it, expect, beforeEach} from 'vitest';
+import {describe, it, expect, beforeEach, vi, afterEach} from 'vitest';
 import {fireEvent} from '@testing-library/dom';
 
 describe('File Attachments', () => {
@@ -203,6 +203,89 @@ describe('File Attachments', () => {
   });
 });
 
+describe('handleFileSelection — input mode override', () => {
+  let confirmSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    confirmSpy = vi.spyOn(window, 'confirm');
+  });
+
+  afterEach(() => {
+    confirmSpy.mockRestore();
+  });
+
+  it('attaches without prompting when type matches advertised mode exactly', () => {
+    confirmSpy.mockReturnValue(false);
+    const attached = selectFiles(
+      [{type: 'image/png'}],
+      ['image/png', 'text/plain'],
+    );
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(attached).toEqual(['image/png']);
+  });
+
+  it('attaches without prompting when type matches a wildcard mode', () => {
+    confirmSpy.mockReturnValue(false);
+    const attached = selectFiles([{type: 'image/jpeg'}], ['image/*']);
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(attached).toEqual(['image/jpeg']);
+  });
+
+  it('attaches without prompting when */* is advertised', () => {
+    confirmSpy.mockReturnValue(false);
+    const attached = selectFiles([{type: 'application/pdf'}], ['*/*']);
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(attached).toEqual(['application/pdf']);
+  });
+
+  it('skips attachment when user cancels confirm on unsupported type', () => {
+    confirmSpy.mockReturnValue(false);
+    const attached = selectFiles([{type: 'image/png'}], ['text/plain']);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(attached).toEqual([]);
+  });
+
+  it('attaches when user confirms override on unsupported type', () => {
+    confirmSpy.mockReturnValue(true);
+    const attached = selectFiles([{type: 'image/png'}], ['text/plain']);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(attached).toEqual(['image/png']);
+  });
+
+  it('shows "none specified" when advertised modes are empty', () => {
+    confirmSpy.mockReturnValue(false);
+    selectFiles([{type: 'image/png'}], []);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    const message = confirmSpy.mock.calls[0][0] as string;
+    expect(message).toContain('none specified');
+    expect(message).not.toContain('()');
+  });
+
+  it('shows "unknown" when file type is empty string', () => {
+    confirmSpy.mockReturnValue(false);
+    selectFiles([{type: ''}], ['text/plain']);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    const message = confirmSpy.mock.calls[0][0] as string;
+    expect(message).toContain('"unknown"');
+  });
+
+  it('attaches with application/octet-stream fallback when file type is empty', () => {
+    confirmSpy.mockReturnValue(true);
+    const attached = selectFiles([{type: ''}], ['text/plain']);
+    expect(attached).toEqual(['application/octet-stream']);
+  });
+
+  it('prompts per file in a multi-file selection', () => {
+    confirmSpy.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const attached = selectFiles(
+      [{type: 'image/png'}, {type: 'application/pdf'}],
+      ['text/plain'],
+    );
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    expect(attached).toEqual(['image/png']);
+  });
+});
+
 // Helper functions that mirror the actual implementation
 interface Attachment {
   name: string;
@@ -255,4 +338,38 @@ function renderAttachmentPreview(attachment: Attachment) {
   chip.appendChild(removeBtn);
 
   attachmentsPreview.appendChild(chip);
+}
+
+// Mirrors the validation + confirm-override logic in handleFileSelection
+// (frontend/src/script.ts). Returns the mime types of files that ended up
+// attached.
+function selectFiles(
+  files: Array<{type: string}>,
+  supportedInputModes: string[],
+): string[] {
+  const attached: string[] = [];
+  for (const file of files) {
+    const isSupported = supportedInputModes.some(mode => {
+      if (mode === '*/*') return true;
+      if (mode.endsWith('/*')) {
+        const prefix = mode.split('/')[0];
+        return file.type.startsWith(prefix + '/');
+      }
+      return file.type === mode;
+    });
+
+    if (!isSupported) {
+      const advertised =
+        supportedInputModes.length > 0
+          ? supportedInputModes.join(', ')
+          : 'none specified';
+      const proceed = window.confirm(
+        `File type "${file.type || 'unknown'}" is not in the agent's advertised input modes (${advertised}).\n\nAttach anyway? The agent may reject it.`,
+      );
+      if (!proceed) continue;
+    }
+
+    attached.push(file.type || 'application/octet-stream');
+  }
+  return attached;
 }
