@@ -495,8 +495,12 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       if (!isSupported) {
+        const advertised =
+          supportedInputModes.length > 0
+            ? supportedInputModes.join(', ')
+            : 'none specified';
         const proceed = confirm(
-          `File type "${file.type || 'unknown'}" is not in the agent's advertised input modes (${supportedInputModes.join(', ')}).\n\nAttach anyway? The agent may reject it.`,
+          `File type "${file.type || 'unknown'}" is not in the agent's advertised input modes (${advertised}).\n\nAttach anyway? The agent may reject it.`,
         );
         if (!proceed) continue;
       }
